@@ -136,6 +136,11 @@ def main():
             avg_cadence = activity.get('averageRunningCadenceInStepsPerMinute', 0) or 0
             elevation_gain = round(activity.get('elevationGain', 0), 1) if activity.get('elevationGain') else 0
             activity_type = activity.get('activityType', {}).get('typeKey', 'running')
+            aerobic_te = activity.get('aerobicTrainingEffect', 0.0)
+            anaerobic_te = activity.get('anaerobicTrainingEffect', 0.0)
+            vo2_max = activity.get('vO2MaxValue', 0)
+            stride_length = round(activity.get('averageStrideLength', 0), 2) if activity.get('averageStrideLength') else 0
+            
             
             # Prepare row
             row = [
@@ -150,6 +155,10 @@ def main():
                 avg_cadence,
                 elevation_gain,
                 activity_type
+                aerobic_te,      
+                anaerobic_te,    
+                vo2_max,         
+                stride_length    
             ]
             
             # Append to sheet
