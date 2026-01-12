@@ -154,11 +154,11 @@ def main():
                 calories,
                 avg_cadence,
                 elevation_gain,
-                activity_type
+                activity_type,
                 aerobic_te,      
                 anaerobic_te,    
                 vo2_max,         
-                stride_length    
+                stride_length,    
             ]
             
             # Append to sheet
