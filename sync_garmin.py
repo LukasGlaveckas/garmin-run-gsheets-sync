@@ -69,7 +69,6 @@ def main():
         return
     
     # Filter for running activities only
-    # The error was likely here; ensuring the list comprehension is closed properly
     running_activities = [
         activity for activity in activities 
         if activity.get('activityType', {}).get('typeKey', '').lower() in ['running', 'treadmill_running', 'trail_running']
@@ -129,3 +128,52 @@ def main():
             distance_meters = activity.get('distance', 0)
             distance_km = round(distance_meters / 1000, 2) if distance_meters else 0
             duration_seconds = activity.get('duration', 0)
+            duration_min = format_duration(duration_seconds)
+            avg_pace = format_pace(distance_meters, duration_seconds)
+            avg_hr = activity.get('averageHR', 0) or 0
+            max_hr = activity.get('maxHR', 0) or 0
+            calories = activity.get('calories', 0) or 0
+            avg_cadence = activity.get('averageRunningCadenceInStepsPerMinute', 0) or 0
+            elevation_gain = round(activity.get('elevationGain', 0), 1) if activity.get('elevationGain') else 0
+            activity_type = activity.get('activityType', {}).get('typeKey', 'running')
+            aerobic_te = activity.get('aerobicTrainingEffect', 0.0)
+            anaerobic_te = activity.get('anaerobicTrainingEffect', 0.0)
+            vo2_max = activity.get('vO2MaxValue', 0)
+            stride_length = round(activity.get('averageStrideLength', 0), 2) if activity.get('averageStrideLength') else 0
+            
+            
+            # Prepare row
+            row = [
+                activity_date,
+                activity_name,
+                distance_km,
+                duration_min,
+                avg_pace,
+                avg_hr,
+                max_hr,
+                calories,
+                avg_cadence,
+                elevation_gain,
+                activity_type,
+                aerobic_te,      
+                anaerobic_te,    
+                vo2_max,         
+                stride_length,    
+            ]
+            
+            # Append to sheet
+            sheet.append_row(row)
+            print(f"✅ Added: {activity_date} - {activity_name} ({distance_km} km)")
+            new_entries += 1
+            
+        except Exception as e:
+            print(f"❌ Error processing activity: {e}")
+            continue
+    
+    if new_entries > 0:
+        print(f"\n🎉 Successfully added {new_entries} new running activities!")
+    else:
+        print("\n✓ No new activities to add")
+
+if __name__ == "__main__":
+    main()
