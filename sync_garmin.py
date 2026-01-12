@@ -69,5 +69,63 @@ def main():
         return
     
     # Filter for running activities only
+    # The error was likely here; ensuring the list comprehension is closed properly
     running_activities = [
-        activity for activity in
+        activity for activity in activities 
+        if activity.get('activityType', {}).get('typeKey', '').lower() in ['running', 'treadmill_running', 'trail_running']
+    ]
+    
+    print(f"Found {len(running_activities)} running activities")
+    
+    if not running_activities:
+        print("No running activities found in recent data")
+        return
+    
+    # Connect to Google Sheets
+    print("Connecting to Google Sheets...")
+    try:
+        creds_dict = json.loads(google_creds_json)
+        creds = Credentials.from_service_account_info(
+            creds_dict,
+            scopes=[
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
+        )
+        client = gspread.authorize(creds)
+        sheet = client.open("Garmin Data").sheet1
+        print("✅ Connected to Google Sheets")
+    except Exception as e:
+        print(f"❌ Failed to connect to Google Sheets: {e}")
+        return
+    
+    # Get existing dates to avoid duplicates
+    try:
+        existing_data = sheet.get_all_values()
+        existing_dates = set()
+        if len(existing_data) > 1:  # If there's data beyond headers
+            for row in existing_data[1:]:  # Skip header row
+                if row and row[0]:  # If date column exists
+                    existing_dates.add(row[0])
+        print(f"Found {len(existing_dates)} existing entries")
+    except Exception as e:
+        print(f"Warning: Could not check existing data: {e}")
+        existing_dates = set()
+    
+    # Process each running activity
+    new_entries = 0
+    for activity in running_activities:
+        try:
+            # Parse activity date
+            activity_date = activity.get('startTimeLocal', '')[:10]  # Get YYYY-MM-DD
+            
+            # Skip if already in sheet
+            if activity_date in existing_dates:
+                print(f"Skipping {activity_date} - already exists")
+                continue
+            
+            # Extract metrics
+            activity_name = activity.get('activityName', 'Run')
+            distance_meters = activity.get('distance', 0)
+            distance_km = round(distance_meters / 1000, 2) if distance_meters else 0
+            duration_seconds = activity.get('duration', 0)
