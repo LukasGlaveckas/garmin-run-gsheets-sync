@@ -6,11 +6,13 @@ import gspread
 from datetime import datetime
 
 def format_duration(seconds):
+    """Convert seconds to minutes (rounded to 2 decimals)"""
     return round(seconds / 60, 2) if seconds else 0
 
 def format_pace(distance_meters, duration_seconds):
+    """Calculate average pace in min/km (M:SS format)"""
     if not distance_meters or not duration_seconds:
-        return 0
+        return "0:00"
     distance_km = distance_meters / 1000
     pace_seconds = duration_seconds / distance_km
     minutes = int(pace_seconds // 60)
@@ -40,8 +42,12 @@ def main():
     # 2. Connect to Google Sheets
     try:
         creds_dict = json.loads(google_creds_json)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
+        creds = Credentials.from_service_account_info(
+            creds_dict, 
+            scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        )
         client = gspread.authorize(creds)
+        # Opens the file by the name "Garmin Data"
         sheet = client.open("Garmin Data").sheet1
         print("✅ Connected to Google Sheets")
     except Exception as e:
@@ -49,7 +55,10 @@ def main():
         return
 
     # 3. Get Activities
-    activities = garmin.get_activities(0, 10) # Pulling last 10 to be fast
+    print("Fetching activities...")
+    activities = garmin.get_activities(0, 15)
+    
+    # Filter for running only
     running_activities = [a for a in activities if a.get('activityType', {}).get('typeKey', '').lower() in ['running', 'treadmill_running', 'trail_running']]
     
     existing_data = sheet.get_all_values()
@@ -57,6 +66,8 @@ def main():
 
     for activity in running_activities:
         activity_date = activity.get('startTimeLocal', '')[:10]
+        
+        # Skip if already in sheet to avoid duplicates
         if activity_date in existing_dates:
             print(f"Skipping {activity_date} - already exists")
             continue
@@ -65,6 +76,7 @@ def main():
         print(f"Processing {activity_date} (ID: {activity_id})...")
 
         # FETCH SPLITS
+        splits_string = "N/A"
         try:
             splits_data = garmin.get_activity_splits(activity_id)
             lap_list = splits_data.get('lapSummaries', [])
@@ -74,9 +86,10 @@ def main():
                 if m_s > 0:
                     p_sec = 1000 / m_s
                     split_paces.append(f"{int(p_sec//60)}:{int(p_sec%60):02d}")
-            splits_string = " | ".join(split_paces)
-        except:
-            splits_string = "N/A"
+            if split_paces:
+                splits_string = " | ".join(split_paces)
+        except Exception as e:
+            print(f"Could not get splits for {activity_id}: {e}")
 
         # ASSEMBLE ROW
         row = [
@@ -94,12 +107,12 @@ def main():
             activity.get('anaerobicTrainingEffect', 0),
             activity.get('vO2MaxValue', 0),
             round(activity.get('averageStrideLength', 0), 1) if activity.get('averageStrideLength') else 0,
-            activity.get('avgPower', 0) or 0,
+            round(activity.get('avgPower', 0), 0) if activity.get('avgPower') else 0,
             splits_string
         ]
 
         sheet.append_row(row)
-        print(f"✅ Added {activity_date}")
+        print(f"✅ Added {activity_date} to sheet")
 
 if __name__ == "__main__":
     main()
