@@ -5,10 +5,20 @@ from google.oauth2.service_account import Credentials
 import gspread
 import time
 
+# Load environment variables from .env file if it exists (for local testing)
+if os.path.exists('.env'):
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
 def format_duration(seconds):
+    """Convert seconds to minutes (rounded to 2 decimals)"""
     return round(seconds / 60, 2) if seconds else 0
 
 def format_pace(distance_meters, duration_seconds):
+    """Calculate pace in min/km (Format M:SS)"""
     if not distance_meters or not duration_seconds:
         return "0:00"
     distance_km = distance_meters / 1000
@@ -20,104 +30,99 @@ def format_pace(distance_meters, duration_seconds):
 def main():
     print("🚀 Starting Bulk Sync (Last 100 Runs)...")
     
+    # Get credentials
     garmin_email = os.environ.get('GARMIN_EMAIL')
     garmin_password = os.environ.get('GARMIN_PASSWORD')
     google_creds_json = os.environ.get('GOOGLE_CREDENTIALS')
     sheet_id = os.environ.get('SHEET_ID')
     
     if not all([garmin_email, garmin_password, google_creds_json, sheet_id]):
-        print("❌ Missing environment variables")
+        print("❌ Missing required environment variables")
         return
-
-    # 1. Connect
+    
+    # Connect to Garmin
     try:
         garmin = Garmin(garmin_email, garmin_password)
         garmin.login()
         print("✅ Connected to Garmin")
-        
+    except Exception as e:
+        print(f"❌ Failed to connect to Garmin: {e}")
+        return
+    
+    # Connect to Google Sheets
+    try:
         creds_dict = json.loads(google_creds_json)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
+        creds = Credentials.from_service_account_info(
+            creds_dict,
+            scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        )
         client = gspread.authorize(creds)
         sheet = client.open("Garmin Data").sheet1
         print("✅ Connected to Google Sheets")
     except Exception as e:
-        print(f"❌ Connection failed: {e}")
+        print(f"❌ Failed to connect to Google Sheets: {e}")
         return
-
-    # 2. Get Activities (Increased to 100)
+    
+    # Get activities (Last 100)
     print("📥 Fetching last 100 activities...")
     try:
         activities = garmin.get_activities(0, 100)
     except Exception as e:
         print(f"❌ Failed to fetch activities: {e}")
         return
-
+    
     existing_data = sheet.get_all_values()
     existing_dates = {row[0] for row in existing_data if row}
-    print(f"found {len(existing_dates)} existing entries.")
-
-    # 3. Process Rows
+    
+    # Process each running activity
+    new_entries = 0
+    
     for activity in activities:
-        # Filter for running
-        if 'running' not in activity.get('activityType', {}).get('typeKey', '').lower():
+        # Filter for running activities only
+        if activity.get('activityType', {}).get('typeKey', '').lower() not in ['running', 'treadmill_running', 'trail_running']:
             continue
+            
+        activity_date = activity.get('startTimeLocal', '')[:10]
+        
+        # Skip if already in sheet (Optional: Comment out to force update)
+        if activity_date in existing_dates:
+            # print(f"Skipping {activity_date} - already exists")
+            continue
+            
+        print(f"   🔹 Processing {activity_date}...")
 
-        date = activity.get('startTimeLocal', '')[:10]
-        if date in existing_dates:
-            # Optional: Skip duplicates (Comment out if you want to overwrite)
-            # print(f"Skipping {date} - already exists")
-            # continue
-            pass
-
-        a_id = activity.get('activityId')
-        print(f"   🔹 Processing {date}...")
-
-        # FETCH SPLITS
+        # EXTRACT SPLITS (Km by Km)
         splits_string = "N/A"
         try:
-            splits_data = garmin.get_activity_splits(a_id)
+            # We attempt to get the splits for detailed analysis
+            activity_id = activity.get('activityId')
+            splits_data = garmin.get_activity_splits(activity_id)
             lap_list = splits_data.get('lapSummaries', [])
             split_paces = []
             for lap in lap_list:
-                m_s = lap.get('averageSpeed', 0)
-                if m_s > 0 and lap.get('distance', 0) > 400: # Filter short/error laps
-                    p_sec = 1000 / m_s
-                    split_paces.append(f"{int(p_sec//60)}:{int(p_sec%60):02d}")
+                # Only count laps that are substantial (e.g. > 500m) to avoid auto-pause noise
+                if lap.get('distance', 0) > 400:
+                    m_s = lap.get('averageSpeed', 0)
+                    if m_s > 0:
+                        p_sec = 1000 / m_s
+                        split_paces.append(f"{int(p_sec//60)}:{int(p_sec%60):02d}")
             if split_paces:
                 splits_string = " | ".join(split_paces)
         except:
             pass
-
-        # PREPARE ROW
-        row = [
-            date,
-            activity.get('activityName', 'Run'),
-            round(activity.get('distance', 0) / 1000, 2),
-            format_duration(activity.get('duration', 0)),
-            format_pace(activity.get('distance', 0), activity.get('duration', 0)),
-            activity.get('averageHR', 0) or 0,
-            activity.get('maxHR', 0) or 0,
-            activity.get('calories', 0) or 0,
-            activity.get('averageRunningCadenceInStepsPerMinute', 0) or 0,
-            round(activity.get('elevationGain', 0), 1) if activity.get('elevationGain') else 0,
-            activity.get('aerobicTrainingEffect', 0),
-            activity.get('anaerobicTrainingEffect', 0),
-            activity.get('vO2MaxValue', 0),
-            round(activity.get('averageStrideLength', 0), 1) if activity.get('averageStrideLength') else 0,
-            round(activity.get('avgPower', 0), 0) if activity.get('avgPower') else 0,
-            splits_string
-        ]
-
-        # Safe Save (Append one by one)
+            
+        # EXTRACT METRICS (Including Watts)
         try:
-            sheet.append_row(row)
-            # Add to existing dates so we don't add it twice if loop restarts
-            existing_dates.add(date) 
-        except Exception as e:
-            print(f"❌ Error saving row for {date}: {e}")
-            time.sleep(5) # Wait if Google complains
-
-    print("✅ Sync complete!")
-
-if __name__ == "__main__":
-    main()
+            distance_meters = activity.get('distance', 0)
+            duration_seconds = activity.get('duration', 0)
+            
+            row = [
+                activity_date,
+                activity.get('activityName', 'Run'),
+                round(distance_meters / 1000, 2) if distance_meters else 0,
+                format_duration(duration_seconds),
+                format_pace(distance_meters, duration_seconds),
+                activity.get('averageHR', 0) or 0,
+                activity.get('maxHR', 0) or 0,
+                activity.get('calories', 0) or 0,
+                activity.get('averageRunningCadenceInStepsPerMinute', 0
